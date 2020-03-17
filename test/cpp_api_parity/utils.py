@@ -8,6 +8,7 @@ TorchNNTestParams = namedtuple(
         'test_instance',
         'cpp_constructor_args',
         'cpp_input_args',
+        'cpp_input_args_requires_grad',
         'has_parity',
         'device',
         'cpp_output_tmp_folder',

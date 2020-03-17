@@ -23,7 +23,7 @@ from cpp_api_parity import torch_nn_modules
 devices = ['cpu', 'cuda']
 
 # yf225 TODO: move to common utils?
-TORCH_NN_MODULE_COMMON_TEST_HARNESS = """\n
+TORCH_NN_MODULE_COMMON_TEST_HARNESS = """
 #include <torch/script.h>
 
 void write_ivalue_to_file(const torch::IValue& ivalue, const std::string& file_path) {
@@ -45,7 +45,7 @@ torch::Tensor _rand_tensor_non_equal(torch::IntArrayRef size) {
 }
 """
 
-TORCH_NN_MODULE_TEST_FORWARD_BACKWARD = Template("""\n
+TORCH_NN_MODULE_TEST_FORWARD_BACKWARD = Template("""
 void ${module_variant_name}_test_forward_backward(const std::string& device) {
   pybind11::gil_scoped_release no_gil;
 
@@ -68,8 +68,13 @@ void ${module_variant_name}_test_forward_backward(const std::string& device) {
   // Put all gradients into a c10::Dict, save it into a file to be compared in Python later
   c10::Dict<std::string, torch::Tensor> grad_dict;
   for (const auto& param : module->named_parameters()) {
-    grad_dict.insert(param.key() + "_grad", param.value().grad());
+    torch::Tensor grad = param.value().grad();
+    if (grad.is_sparse()) {
+      grad = grad.to_dense();
+    }
+    grad_dict.insert(param.key() + "_grad", grad);
   }
+
   write_ivalue_to_file(
     torch::IValue(grad_dict),
     "${cpp_output_tmp_folder}/${module_variant_name}_backward_grad_dict.pt");
@@ -88,9 +93,11 @@ def _compile_cpp_code_inline(name, cpp_sources, functions):
 
 def _test_torch_nn_module_variant(unit_test_class, test_params):
   def set_python_tensors_all_requires_grad(python_input):
-    # Why is this function not working???
-    if isinstance(python_input, torch.Tensor) and python_input.dtype != torch.long:
-      return python_input.requires_grad_(True)
+    if isinstance(python_input, torch.Tensor):
+      if python_input.dtype == torch.long:
+        return python_input
+      else:
+        return python_input.requires_grad_(True)
     else:
       return [set_python_tensors_all_requires_grad(tensor) for tensor in python_input]
 
@@ -103,13 +110,18 @@ def _test_torch_nn_module_variant(unit_test_class, test_params):
 
     module = python_constructor(*python_constructor_args).to(device)
     inputs = set_python_tensors_all_requires_grad(test_params.test_instance._get_input())
+    if is_criterion_test(test_params.test_instance):
+      inputs += [test_params.test_instance._get_target()]
     python_output = module(inputs)
 
     python_output.sum().backward()
     # Put all gradients into a dict, to be compared later
     python_grad_dict = {}
     for name, param in module.named_parameters():
-      python_grad_dict[name + "_grad"] = param.grad
+      grad = param.grad;
+      if grad.is_sparse:
+        grad = grad.to_dense()
+      python_grad_dict[name + "_grad"] = grad
 
     cpp_test_name = '{}_{}'.format(test_params.module_variant_name, 'test_forward_backward')
     cpp_test_fn = getattr(unit_test_class.cpp_module, cpp_test_name)
@@ -164,13 +176,10 @@ def _compute_module_name(test_params_dict):
     return module_name
 
 # yf225 TODO: move to common utils?
-def _process_test_params_for_module(test_params_dict, module_metadata, device, is_criterion):
+def _process_test_params_for_module(test_params_dict, module_metadata, device, test_instance_class):
   module_name = _compute_module_name(test_params_dict)
   test_params_dict['constructor'] = test_params_dict.get('constructor', getattr(torch.nn, module_name))
-  if is_criterion:
-      test = common_nn.CriterionTest(**test_params_dict)
-  else:
-      test = common_nn.ModuleTest(**test_params_dict)
+  test = test_instance_class(**test_params_dict)
   # yf225 TODO: can we remove the magic number `5` here?
   module_variant_name = test.get_name()[5:] + (('_' + device) if device != 'cpu' else '')    
   assert "cpp_input_args" in test_params_dict, \
@@ -182,6 +191,8 @@ def _process_test_params_for_module(test_params_dict, module_metadata, device, i
     test_instance=test,
     cpp_constructor_args=test_params_dict.get('cpp_constructor_args', ''),
     cpp_input_args=test_params_dict['cpp_input_args'],
+    cpp_target_args=test_params_dict.get('cpp_target_args', None),
+    cpp_input_args_requires_grad=test_params_dict.get('cpp_input_args_requires_grad', True),
     has_parity=test_params_dict.get('has_parity', True),
     device=device,
     cpp_output_tmp_folder=tempfile.mkdtemp(),
@@ -198,7 +209,12 @@ def add_test(unit_test_class, test_name, test_fn):
   setattr(unit_test_class, test_name, test_fn)
 
 def set_cpp_tensors_all_requires_grad(cpp_input_args):
-  return [x + ".requires_grad_()" for x in cpp_input_args]
+  # yf225 TODO: we need a flag to decide whether to set requires grad (e.g. it doesn't work for long tensors)
+  return ["{}.requires_grad_(true)".format(x) for x in cpp_input_args]
+
+def is_criterion_test(test_instance):
+  return isinstance(test_instance, common_nn.CriterionTest) or \
+    isinstance(test_instance, common_nn.NewCriterionTest)
 
 # yf225 TODO: move to common utils?
 # yf225 TODO: we should check in a copy of the generated source code, and then run consistency test (compare old vs. newly generated)
@@ -206,18 +222,28 @@ def generate_test_cpp_sources(test_params, template):
   cpp_constructor_args = test_params.cpp_constructor_args
   if cpp_constructor_args != '':
     cpp_constructor_args = '({})'.format(cpp_constructor_args)
+
+  cpp_input_args = test_params.cpp_input_args
+  if test_params.cpp_input_args_requires_grad:
+    cpp_input_args = set_cpp_tensors_all_requires_grad(cpp_input_args)
+  if is_criterion_test(test_params.test_instance):
+    assert test_params.cpp_target_args is not None, \
+      "`cpp_target_args` entry must be present in test params dict for {}".format(module_variant_name)
+    cpp_input_args += test_params.cpp_target_args
+
   test_cpp_sources = template.substitute(
     module_variant_name=test_params.module_variant_name,
     module_qualified_name='torch::nn::{}'.format(test_params.module_name),
     cpp_constructor_args=cpp_constructor_args,
-    cpp_input_args=", ".join(set_cpp_tensors_all_requires_grad(test_params.cpp_input_args)),
+    cpp_input_args=", ".join(cpp_input_args),
     cpp_output_tmp_folder=test_params.cpp_output_tmp_folder,
   )
   return test_cpp_sources
 
-def add_torch_nn_module_impl_parity_tests(parity_table, unit_test_class, torch_nn_modules, module_tests, is_criterion):
-  torch_nn_test_params_map = {}
-  for test_params_dict in module_tests:
+torch_nn_test_params_map = {}
+
+def add_torch_nn_module_impl_parity_tests(parity_table, unit_test_class, torch_nn_modules, test_params_dicts, test_instance_class):
+  for test_params_dict in test_params_dicts:
     # Skip all `torch.nn.functional` tests, since they are handled by another test suite.
     if 'FunctionalModule' in str(test_params_dict.get('constructor', '')):
       continue
@@ -242,7 +268,8 @@ def add_torch_nn_module_impl_parity_tests(parity_table, unit_test_class, torch_n
         test_params_dict=test_params_dict,
         module_metadata=module_metadata,
         device=device,
-        is_criterion=is_criterion)
+        test_instance_class=test_instance_class,
+      )
       test_name = 'test_torch_nn_{}'.format(test_params.module_variant_name)
       torch_nn_test_params_map[test_name] = test_params
 
@@ -259,6 +286,16 @@ def add_torch_nn_module_impl_parity_tests(parity_table, unit_test_class, torch_n
 
       add_test(unit_test_class, test_name, test_fn)
 
+
+def add_tests(unit_test_class, test_params_dicts, test_instance_class, torch_nn_modules, parity_table):
+  add_torch_nn_module_impl_parity_tests(
+    parity_table=parity_table,
+    unit_test_class=unit_test_class,
+    torch_nn_modules=torch_nn_modules,
+    test_params_dicts=test_params_dicts,
+    test_instance_class=test_instance_class)
+
+def build_cpp_tests(unit_test_class):
   # Put all cpp source code into one file and compile together, in order to speed up the build
   # yf225 TODO bonus point: check in the cpp source code for comparison
   if len(torch_nn_test_params_map) > 0:
@@ -278,19 +315,3 @@ def add_torch_nn_module_impl_parity_tests(parity_table, unit_test_class, torch_n
       cpp_sources=cpp_sources,
       functions=functions)
     unit_test_class.cpp_module = cpp_module
-
-
-def add_tests(unit_test_class, module_tests, criterion_tests, torch_nn_modules, parity_table):
-  add_torch_nn_module_impl_parity_tests(
-    parity_table=parity_table,
-    unit_test_class=unit_test_class,
-    torch_nn_modules=torch_nn_modules,
-    module_tests=module_tests,
-    is_criterion=False)
-
-  add_torch_nn_module_impl_parity_tests(
-    parity_table=parity_table,
-    unit_test_class=unit_test_class,
-    torch_nn_modules=torch_nn_modules,
-    module_tests=criterion_tests,
-    is_criterion=True)

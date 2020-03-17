@@ -336,6 +336,8 @@ def wrap_functional(fn, **kwargs):
             return fn(*args, **kwargs)
     return FunctionalModule
 
+# yf225 TODO: work on criterion tests
+# yf225 TODO: work on functional tests (aka. wrap_functional)
 
 def poissonnllloss_no_reduce_test():
     t = torch.randn(10, 10)
@@ -925,12 +927,11 @@ def multimarginloss_weights_no_reduce_test():
 
 
 def fractional_max_pool2d_test(test_case):
-    random_samples = torch.DoubleTensor(1, 3, 2).uniform_()
-    cpp_random_samples = 'torch::empty({1, 3, 2}, torch::kDouble).uniform_()'
+    cpp_random_samples = 'torch::empty({1, 3, 2}).uniform_()'
     if test_case == 'ratio':
         return dict(
             constructor=lambda: nn.FractionalMaxPool2d(
-                2, output_ratio=0.5, _random_samples=random_samples),
+                2, output_ratio=0.5, _random_samples=torch.empty(1, 3, 2).uniform_()),
             cpp_constructor_args='torch::nn::FractionalMaxPool2dOptions(2).output_ratio(0.5)._random_samples(%s)' % cpp_random_samples,
             input_size=(1, 3, 5, 7),
             cpp_input_args=['torch::randn({1, 3, 5, 7})'],
@@ -938,20 +939,19 @@ def fractional_max_pool2d_test(test_case):
     elif test_case == 'size':
         return dict(
             constructor=lambda: nn.FractionalMaxPool2d((2, 3), output_size=(
-                4, 3), _random_samples=random_samples),
-            cpp_constructor_args='torch::nn::FractionalMaxPool2dOptions({2, 3}).output_size(torch::IntArrayRef({4, 3}))._random_samples(%s)' % cpp_random_samples,
+                4, 3), _random_samples=torch.empty(1, 3, 2).uniform_()),
+            cpp_constructor_args='torch::nn::FractionalMaxPool2dOptions({2, 3}).output_size(std::vector<int64_t>({4, 3}))._random_samples(%s)' % cpp_random_samples,
             input_size=(1, 3, 7, 6),
             cpp_input_args=['torch::randn({1, 3, 7, 6})'],
             fullname='FractionalMaxPool2d_size')
 
 
 def fractional_max_pool3d_test(test_case):
-    random_samples = torch.DoubleTensor(2, 4, 3).uniform_()
-    cpp_random_samples = 'torch::empty({2, 4, 3}, torch::kDouble).uniform_()'
+    cpp_random_samples = 'torch::empty({2, 4, 3}).uniform_()'
     if test_case == 'ratio':
         return dict(
             constructor=lambda: nn.FractionalMaxPool3d(
-                2, output_ratio=0.5, _random_samples=random_samples),
+                2, output_ratio=0.5, _random_samples=torch.empty(2, 4, 3).uniform_()),
             cpp_constructor_args='torch::nn::FractionalMaxPool3dOptions(2).output_ratio(0.5)._random_samples(%s)' % cpp_random_samples,
             input_size=(2, 4, 5, 5, 5),
             cpp_input_args=['torch::randn({2, 4, 5, 5, 5})'],
@@ -959,16 +959,16 @@ def fractional_max_pool3d_test(test_case):
     elif test_case == 'size':
         return dict(
             constructor=lambda: nn.FractionalMaxPool3d((2, 2, 2), output_size=(
-                4, 4, 4), _random_samples=random_samples),
-            cpp_constructor_args='torch::nn::FractionalMaxPool3dOptions({2, 2, 2}).output_size(torch::IntArrayRef({4, 4, 4}))._random_samples(%s)' % cpp_random_samples,
+                4, 4, 4), _random_samples=torch.empty(2, 4, 3).uniform_()),
+            cpp_constructor_args='torch::nn::FractionalMaxPool3dOptions({2, 2, 2}).output_size(std::vector<int64_t>({4, 4, 4}))._random_samples(%s)' % cpp_random_samples,
             input_size=(2, 4, 7, 7, 7),
             cpp_input_args=['torch::randn({2, 4, 7, 7, 7})'],
             fullname='FractionalMaxPool3d_size')
     elif test_case == 'asymsize':
         return dict(
             constructor=lambda: nn.FractionalMaxPool3d((4, 2, 3), output_size=(
-                10, 3, 2), _random_samples=random_samples),
-            cpp_constructor_args='torch::nn::FractionalMaxPool3dOptions({4, 2, 3}).output_size(torch::IntArrayRef({10, 3, 2}))._random_samples(%s)' % cpp_random_samples,
+                10, 3, 2), _random_samples=torch.empty(2, 4, 3).uniform_()),
+            cpp_constructor_args='torch::nn::FractionalMaxPool3dOptions({4, 2, 3}).output_size(std::vector<int64_t>({10, 3, 2}))._random_samples(%s)' % cpp_random_samples,
             input_size=(2, 4, 16, 7, 5),
             cpp_input_args=['torch::randn({2, 4, 16, 7, 5})'],
             fullname='FractionalMaxPool3d_asymsize')
@@ -2091,6 +2091,7 @@ new_module_tests = [
         cpp_constructor_args='torch::nn::EmbeddingOptions(4, 3)',
         input_fn=lambda: torch.empty(2, 3, dtype=torch.long).random_(4),
         cpp_input_args=['torch::empty({2, 3}, torch::kLong).random_(4)'],
+        cpp_input_args_requires_grad=False,
         jacobian_input=False,
         check_gradgrad=False,
     ),
@@ -2100,6 +2101,7 @@ new_module_tests = [
         cpp_constructor_args='torch::nn::EmbeddingBagOptions(4, 3)',
         input_fn=lambda: torch.empty(2, 3, dtype=torch.long).random_(4),
         cpp_input_args=['torch::empty({2, 3}, torch::kLong).random_(4)'],
+        cpp_input_args_requires_grad=False,
         jacobian_input=False,
         check_gradgrad=False,
         desc='mean',
@@ -2110,6 +2112,7 @@ new_module_tests = [
         cpp_constructor_args='torch::nn::EmbeddingBagOptions(4, 3).max_norm(c10::nullopt).norm_type(2.).scale_grad_by_freq(false).mode(torch::kSum)',
         input_fn=lambda: torch.empty(2, 3, dtype=torch.long).random_(4),
         cpp_input_args=['torch::empty({2, 3}, torch::kLong).random_(4)'],
+        cpp_input_args_requires_grad=False,
         jacobian_input=False,
         check_gradgrad=False,
         desc='sum',
@@ -2120,6 +2123,7 @@ new_module_tests = [
         cpp_constructor_args='torch::nn::EmbeddingBagOptions(4, 3).max_norm(c10::nullopt).norm_type(2.).scale_grad_by_freq(false).mode(torch::kMax)',
         input_fn=lambda: torch.empty(2, 3, dtype=torch.long).random_(4),
         cpp_input_args=['torch::empty({2, 3}, torch::kLong).random_(4)'],
+        cpp_input_args_requires_grad=False,
         jacobian_input=False,
         check_gradgrad=False,
         desc='max',
@@ -2129,7 +2133,8 @@ new_module_tests = [
         constructor=lambda: nn.EmbeddingBag(4, 3, sparse=True),
         cpp_constructor_args='torch::nn::EmbeddingBagOptions(4, 3).sparse(true)',
         input_fn=lambda: torch.randperm(2).repeat(1, 2),
-        cpp_input_args=['torch::randperm(2).repeat({1, 2})'],
+        cpp_input_args=['torch::randperm(2, torch::kLong).repeat({1, 2})'],
+        cpp_input_args_requires_grad=False,
         jacobian_input=False,
         check_gradgrad=False,
     ),
@@ -2137,7 +2142,8 @@ new_module_tests = [
         constructor=lambda: nn.Embedding(4, 3, sparse=True),
         cpp_constructor_args='torch::nn::EmbeddingOptions(4, 3).sparse(true)',
         input_fn=lambda: torch.randperm(2).repeat(1, 2),
-        cpp_input_args=['torch::randperm(2).repeat({1, 2})'],
+        cpp_input_args=['torch::randperm(2, torch::kLong).repeat({1, 2})'],
+        cpp_input_args_requires_grad=False,
         jacobian_input=False,
         fullname='Embedding_sparse',
         check_gradgrad=False,
@@ -2582,7 +2588,7 @@ new_module_tests = [
         constructor_args=((3, 4, 5),),
         cpp_constructor_args='torch::nn::AdaptiveAvgPool3dOptions({3, 4, 5})',
         input_fn=lambda: torch.rand(2, 3, 5, 3, 7),
-        cpp_input_args=['torch::rand({2, 3, 5, 2, 7})'],
+        cpp_input_args=['torch::rand({2, 3, 5, 3, 7})'],
         desc='tuple',
     ),
     dict(
@@ -2590,7 +2596,7 @@ new_module_tests = [
         constructor_args=((None, 4, 5),),
         cpp_constructor_args='torch::nn::AdaptiveAvgPool3dOptions({c10::nullopt, 4, 5})',
         input_fn=lambda: torch.rand(2, 3, 5, 3, 7),
-        cpp_input_args=['torch::rand({2, 3, 5, 2, 7})'],
+        cpp_input_args=['torch::rand({2, 3, 5, 3, 7})'],
         desc='tuple_none',
     ),
     dict(
@@ -3009,7 +3015,6 @@ new_module_tests = [
     ),
 ]
 
-
 # add conv padding mode tests:
 for padding_mode, cpp_padding_mode in zip(
     ['reflect', 'circular', 'replicate', 'zeros'],
@@ -3024,7 +3029,7 @@ for padding_mode, cpp_padding_mode in zip(
             #        https://github.com/pytorch/pytorch/issues/27655
             continue
         input_size = (2, 3) + (3,) * d
-        cpp_input_args = ['torch::randn({{}})'.format(', '.join([str(x) for x in input_size]))]
+        cpp_input_args = ['torch::randn({%s})' % ', '.join([str(x) for x in input_size])]
         new_module_tests.append(
             dict(
                 module_name='Conv{}d'.format(d),
